@@ -17,6 +17,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  actions: write
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
@@ -63,6 +64,17 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
+    - name: Restore dl/ccache cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          openwrt/dl
+          openwrt/.ccache
+        key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-${{ hashFiles('openwrt/.config') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-
+          ${{ runner.os }}-openwrt-
+          
     - name: Load custom feeds
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
@@ -83,12 +95,15 @@ jobs:
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
-
+    - name: Enable ccache
+      run: |
+        cd openwrt
+        grep -q '^CONFIG_CCACHE=y' .config || echo 'CONFIG_CCACHE=y' >> .config
+        make defconfig
     - name: Download package
       id: package
       run: |
         cd openwrt
-        make defconfig
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
