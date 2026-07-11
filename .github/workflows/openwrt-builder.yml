@@ -43,23 +43,77 @@ jobs:
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
+        TZ: Asia/Shanghai
+      shell: bash
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install  ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "$TZ"
+        set -Eeuo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        export TZ="${TZ:-Asia/Shanghai}"
+    
+        log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
+    
+        # 心跳输出：避免长时间无日志被误判卡死
+        (
+          while true; do
+            log "heartbeat: initialization still running..."
+            sleep 30
+          done
+        ) &
+        HB_PID=$!
+        cleanup() {
+          set +e
+          kill "$HB_PID" >/dev/null 2>&1 || true
+        }
+        trap cleanup EXIT
+    
+        log "free disk space: remove preinstalled SDK/tool caches"
+        sudo rm -rf \
+          /etc/apt/sources.list.d/* \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /opt/ghc \
+          /opt/hostedtoolcache/CodeQL
+    
+        log "docker image prune"
+        timeout 20m sudo docker image prune --all --force || true
+    
+        log "apt update"
+        timeout 10m sudo -E apt-get update
+    
+        log "apt install build dependencies"
+        timeout 40m sudo -E apt-get install -y \
+          ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl \
+          device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool \
+          libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+          libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp \
+          ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync \
+          scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+    
+        log "autoremove purge (bounded)"
+        timeout 20m sudo -E apt-get autoremove --purge -y || true
+    
+        log "apt clean"
+        sudo -E apt-get clean || true
+    
+        log "dpkg/apt recovery safeguard"
+        sudo dpkg --configure -a || true
+        sudo apt-get -f install -y || true
+    
+        log "set timezone"
+        sudo timedatectl set-timezone "${TZ}" || true
+    
+        log "prepare workdir"
         sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
-
-    - name: Clone source code
-      working-directory: /workdir
-      run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        sudo chown "$USER":"$(id -gn)" /workdir
+    
+        log "initialization done"
+    
+        - name: Clone source code
+          working-directory: /workdir
+          run: |
+            df -hT $PWD
+            git clone $REPO_URL -b $REPO_BRANCH openwrt
+            ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Restore dl/ccache cache
       uses: actions/cache@v4
